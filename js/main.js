@@ -205,6 +205,9 @@ const WEBHOOK_URL = 'https://hostinger-n8n.fe8diu.easypanel.host/webhook/lp-lead
 document.getElementById('form-contato').addEventListener('submit', async function (e) {
   e.preventDefault();
 
+  // Aciona a validação nativa (required, type, etc.) em todos os campos
+  if (!this.reportValidity()) return;
+
   var submitBtn = this.querySelector('[type="submit"]');
   var feedback  = document.getElementById('form-feedback');
 
