@@ -68,21 +68,12 @@
 <noscript><iframe src="https://load.tss.arck1pro.com.br/ns.html?id=GTM-5XX66FVN" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <!-- End Google Tag Manager (noscript) -->
 
-  <!-- Link de acessibilidade: pular para o conteúdo principal -->
-  <a class="skip-link" href="#conteudo">Pular para o conteúdo principal</a>
-
-  <main id="conteudo">
+<main id="conteudo">
 
     <!-- ═══════ HERO ═══════ -->
     <section class="hero" id="inicio" aria-labelledby="hero-titulo">
 
-      <!-- Imagem de fundo decorativa (opcional) -->
-      <!-- Coloque uma foto do litoral de SC em images/porto-belo-aerial.jpg -->
-      <div class="hero-bg" aria-hidden="true">
-        <img src="images/porto-belo-aerial.jpg" alt="" width="1920" height="1080">
-      </div>
-
-      <!-- Coluna esquerda — Texto -->
+<!-- Coluna esquerda — Texto -->
       <div class="hero-copy">
 
         <div class="hero-logo">
@@ -294,6 +285,9 @@
                   value="100000"
                   aria-label="Capital a investir em reais">
               </div>
+              <p class="sim-min-warning" id="sim-min-warning" hidden>
+                O valor mínimo para investimento é R$&nbsp;50.000
+              </p>
               <label for="sl-capital" class="sr-only">Ajuste o capital com o controle deslizante</label>
               <input
                 type="range"
@@ -524,9 +518,9 @@
               class="form-input"
               type="tel"
               id="tel"
-              name="tel"
+              name="whatsapp"
               required
-              maxlength="18"
+              maxlength="15"
               inputmode="tel"
               placeholder="(11) 99999-9999"
               autocomplete="tel">

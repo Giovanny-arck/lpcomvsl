@@ -50,23 +50,6 @@ a {
 
 /* ─── ACESSIBILIDADE ───────────────────────────────────── */
 /* NOVO: skip link, sr-only e focus-visible adicionados para acessibilidade */
-.skip-link {
-  position: absolute;
-  top: -100%;
-  left: 1rem;
-  background: var(--gold);
-  color: var(--bg);
-  padding: .75rem 1.5rem;
-  font-weight: 600;
-  font-size: .9rem;
-  letter-spacing: .05em;
-  z-index: 9999;
-  transition: top .2s;
-}
-.skip-link:focus {
-  top: 1rem;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -564,6 +547,14 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* NOVO: classe que substitui o inline style="font-size:.82rem;color:var(--light-40);..." do simulador */
+.sim-min-warning {
+  font-size: .82rem;
+  color: #ff8a80;
+  margin-top: .55rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .sim-modo-desc {
   font-size: .82rem;
   color: var(--light-40);

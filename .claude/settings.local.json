@@ -9,7 +9,8 @@
       "Bash(del \"C:\\\\Users\\\\Arck1Pro\\\\Downloads\\\\LP com vsl\\\\fix-workflow.mjs\")",
       "Bash(curl -s \"https://sprinthub-api-master.sprinthub.app/crm?i=arck1pro&apitoken=8e76ab48-e06a-4fc0-a261-eb3e1fcccab8\")",
       "Bash(node fix-workflow-v2.mjs)",
-      "Bash(node fix-workflow-v3.mjs)"
+      "Bash(node fix-workflow-v3.mjs)",
+      "Bash(node fix-workflow-v4.mjs)"
     ]
   }
 }

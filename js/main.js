@@ -112,7 +112,10 @@ function simCalc() {
 // ALTERADO: substituídos os atributos oninput/onclick inline por addEventListener
 // Capital: input ↔ slider
 document.getElementById('inp-capital').addEventListener('input', function () {
-  document.getElementById('sl-capital').value = Math.min(+this.value || 50000, 1000000);
+  var val = +this.value;
+  var warning = document.getElementById('sim-min-warning');
+  warning.hidden = !(this.value !== '' && val < 50000);
+  document.getElementById('sl-capital').value = Math.min(val || 50000, 1000000);
   simCalc();
 });
 
@@ -174,13 +177,20 @@ document.querySelectorAll('.faq-btn').forEach(function (btn) {
   });
 });
 
-/* ─── CAMPO WHATSAPP: só números e formatação, máx 18 chars ─ */
+/* ─── MÁSCARA WHATSAPP: (XX) XXXXXXXXX, sem letras, sem espaços manuais ─ */
 document.getElementById('tel').addEventListener('input', function () {
-  // Remove qualquer letra — mantém dígitos, espaço, +, (, ), -
-  var limpo = this.value.replace(/[a-zA-ZÀ-ÖØ-öø-ÿ]/g, '');
-  // Garante o limite de 18 caracteres
-  if (limpo.length > 18) limpo = limpo.slice(0, 18);
-  if (this.value !== limpo) this.value = limpo;
+  // Extrai apenas dígitos e limita a 11 (2 DDD + 9 número)
+  var digits = this.value.replace(/\D/g, '').slice(0, 11);
+
+  // Reconstrói com máscara: (XX) XXXXXXXXX
+  var masked = '';
+  if (digits.length > 0) {
+    masked = '(' + digits.slice(0, 2);
+    if (digits.length > 2) {
+      masked += ') ' + digits.slice(2);
+    }
+  }
+  this.value = masked;
 });
 
 /* ─── FORMULÁRIO → n8n WEBHOOK ──────────────────────────── */
