@@ -44,12 +44,10 @@
 <!-- End Google Tag Manager -->
 
   <!-- Meta Pixel Code -->
-  <!-- ALTERADO: o pixel 2102101857297540 não dispara mais PageView. O ÚNICO
-       evento enviado é o Lead, em js/main.js, e somente quando o webhook do
-       SprintHub confirma o recebimento — nunca no clique do botão.
-       O init continua obrigatório: sem ele o fbq('track','Lead') não sai.
-       autoConfig=false desliga os eventos automáticos da Meta (cliques em
-       botão, microdados), que entrariam sem passar por este código. -->
+  <!-- Única fonte de PageView do site: a página de obrigado não carrega o
+       pixel, e o contêiner GTM não pode ter tag Meta com este mesmo ID.
+       O Lead fica em js/main.js, só com o envio confirmado e uma vez por visita.
+       autoConfig=false impede a Meta de registrar eventos por conta própria. -->
 <script>
 !function(f,b,e,v,n,t,s)
 {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -61,7 +59,11 @@ s.parentNode.insertBefore(t,s)}(window, document,'script',
 'https://connect.facebook.net/en_US/fbevents.js');
 fbq('set', 'autoConfig', false, '2102101857297540');
 fbq('init', '2102101857297540');
+fbq('track', 'PageView');
 </script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=2102101857297540&ev=PageView&noscript=1"
+alt=""/></noscript>
   <!-- End Meta Pixel Code -->
 
   <!-- ─── Dados Estruturados (Schema.org) ──────────────── -->
@@ -549,16 +551,23 @@ fbq('init', '2102101857297540');
 
           <div class="form-row">
             <label class="form-label" for="tel">Telefone/WhatsApp</label>
+            <!-- ALTERADO: pattern exige o celular completo - (XX) XXXXX-XXXX.
+                 So os 11 digitos passam; a mensagem em portugues vem do JS. -->
             <input
               class="form-input"
               type="tel"
               id="tel"
               name="whatsapp"
               required
+              minlength="15"
               maxlength="15"
-              inputmode="tel"
+              pattern="\(\d{2}\) 9\d{4}-\d{4}"
+              inputmode="numeric"
               placeholder="(11) 99999-9999"
-              autocomplete="tel">
+              autocomplete="tel"
+              aria-describedby="tel-erro">
+            <!-- NOVO: erro do campo, preenchido pelo JS -->
+            <p class="form-error" id="tel-erro" role="alert" aria-live="polite" hidden></p>
           </div>
 
           <div class="form-row">

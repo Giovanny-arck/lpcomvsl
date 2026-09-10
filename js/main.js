@@ -13,32 +13,190 @@ document.querySelectorAll('a[data-cta]').forEach(function (btn) {
   });
 });
 
-/* ─── CAPTURA DE UTMs ───────────────────────────────────── */
-/* NOVO: lê utm_source, utm_medium, utm_campaign, utm_term e utm_content da URL */
-function getUTMs() {
-  var p = new URLSearchParams(window.location.search);
-  return {
-    utm_source:   p.get('utm_source')   || '',
-    utm_medium:   p.get('utm_medium')   || '',
-    utm_campaign: p.get('utm_campaign') || '',
-    utm_term:     p.get('utm_term')     || '',
-    utm_content:  p.get('utm_content')  || '',
-  };
+/* ═══════════════════════════════════════════════════════════
+   RASTREAMENTO DE CONVERSÃO (META) — FONTE ÚNICA
+   ═══════════════════════════════════════════════════════════
+   Tudo que diz respeito ao evento Lead mora nesta seção, e só aqui.
+   Regra única: o Lead é disparado depois que o SprintHub confirma a
+   criação do contato, uma vez por lead, com um event_id estável.
+
+   LIMITE CONHECIDO: o site é estático, sem backend próprio. O event_id
+   nasce no navegador e a idempotência é por navegador. Duas conversões
+   do mesmo lead em dispositivos diferentes não se enxergam — só um
+   servidor resolveria isso. */
+
+/* ─── ARMAZENAMENTO ─────────────────────────────────────── */
+/* localStorage falha em aba anônima, com storage bloqueado ou cota cheia.
+   Nesses casos perde-se a memória entre carregamentos, nunca a conversão:
+   o fluxo degrada para o comportamento de sessão única. */
+var STORE_CONVERSOES = 'ari.conversoes.v1';
+var STORE_ATRIBUICAO = 'ari.atribuicao.v1';
+
+function storeLer(chave) {
+  try {
+    var bruto = localStorage.getItem(chave);
+    return bruto ? JSON.parse(bruto) : null;
+  } catch (e) {
+    return null;
+  }
 }
 
-/* ─── ID DE EVENTO (PIXEL DA META) ──────────────────────── */
-/* NOVO: gera um id único por conversão. Serve para deduplicar o evento caso
-   a Conversions API passe a enviar o mesmo Lead pelo servidor. */
+function storeGravar(chave, valor) {
+  try {
+    localStorage.setItem(chave, JSON.stringify(valor));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* ─── LOG DO CICLO DE VIDA ──────────────────────────────── */
+/* Prefixo único para filtrar a jornada inteira da conversão no console. */
+function logConv(etapa, dados) {
+  console.info('[ARI][conversao] ' + etapa, dados === undefined ? '' : dados);
+}
+
+/* ─── ATRIBUIÇÃO ────────────────────────────────────────── */
+/* Capturada na ENTRADA da landing page e preservada até o envio, para o
+   lead não perder a origem se recarregar sem os parâmetros ou voltar
+   depois por outro caminho.
+
+   Regras de sobrescrita, explícitas de propósito:
+   - utm_* e landing_page: PRIMEIRO toque vence. Uma visita posterior não
+     apaga a campanha que trouxe a pessoa.
+   - fbclid: ÚLTIMO toque vence. É o clique que a Meta usa para atribuir a
+     conversão, então precisa ser o mais recente.
+   - primeira_visita: gravado uma vez, nunca sobrescrito. */
+var PARAMS_UTM = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id'];
+
+function capturarAtribuicao() {
+  var p     = new URLSearchParams(window.location.search);
+  var salvo = storeLer(STORE_ATRIBUICAO) || {};
+  var temOrigem = false;
+  var i, k, v;
+
+  for (i = 0; i < PARAMS_UTM.length; i++) {
+    if (salvo[PARAMS_UTM[i]]) { temOrigem = true; break; }
+  }
+
+  if (!temOrigem) {
+    for (i = 0; i < PARAMS_UTM.length; i++) {
+      k = PARAMS_UTM[i];
+      v = p.get(k);
+      if (v) salvo[k] = v;
+    }
+  }
+
+  v = p.get('fbclid');
+  if (v) salvo.fbclid = v;
+
+  if (!salvo.landing_page)    salvo.landing_page    = window.location.href;
+  if (!salvo.primeira_visita) salvo.primeira_visita = new Date().toISOString();
+
+  storeGravar(STORE_ATRIBUICAO, salvo);
+  return salvo;
+}
+
+var atribuicao = capturarAtribuicao();
+
+/* Cookies que a Meta usa para casar a conversão com o clique no anúncio.
+   Seguem junto do lead: sem eles a Conversions API, quando existir, perde
+   boa parte da atribuição. _fbc só existe se o pixel tiver carregado — por
+   isso o fbclid cru também vai, como plano B. */
+function lerCookie(nome) {
+  var partes = document.cookie ? document.cookie.split(';') : [];
+  for (var i = 0; i < partes.length; i++) {
+    var par = partes[i].split('=');
+    if (par[0].trim() === nome) return par.slice(1).join('=').trim();
+  }
+  return '';
+}
+
+/* ─── REGISTRO DE CONVERSÕES (IDEMPOTÊNCIA) ─────────────── */
+/* A conversão é identificada pelo WhatsApp em dígitos — o mesmo campo que
+   o SprintHub usa para reconhecer contato repetido (a resposta 409).
+
+   Efeito: recarregar a página, voltar do /obrigado, reenviar o mesmo
+   formulário ou tentar de novo depois de um erro reaproveitam o MESMO
+   event_id e não geram um segundo Lead. Um lead de fato diferente tem
+   outra chave e é contado normalmente. */
 function novoEventId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
   return 'lead-' + Date.now() + '-' + Math.random().toString(16).slice(2);
 }
 
-/* NOVO: o Lead é o único evento que este site manda para o pixel, e ele vale
-   uma vez por conversão. Sem esta trava, um segundo submit — duplo clique antes
-   do redirect, ou nova tentativa depois de um erro — dispararia outro Lead, com
-   eventID diferente, que a Meta contaria como uma conversão nova. */
-var leadEnviado = false;
+/* Espelho em memoria. Com o localStorage bloqueado (aba anonima, cota cheia)
+   storeLer devolve null e cada submit criaria um event_id novo, derrubando a
+   protecao contra disparo duplo. Com o espelho, a idempotencia sobrevive ao
+   menos dentro da visita, que e o que esta secao promete no topo. */
+var conversoesMemoria = {};
+
+function lerConversoes() {
+  return storeLer(STORE_CONVERSOES) || conversoesMemoria;
+}
+
+function gravarConversao(chave, registro) {
+  conversoesMemoria[chave] = registro;
+  var todas = storeLer(STORE_CONVERSOES) || {};
+  todas[chave] = registro;
+  storeGravar(STORE_CONVERSOES, todas);
+}
+
+/* Devolve o registro da conversão, criando um na primeira vez. O event_id
+   nasce aqui e nunca muda para a mesma chave — é o que impede um retry de
+   virar uma segunda conversão. */
+function obterConversao(chave) {
+  var reg = lerConversoes()[chave];
+
+  if (reg && reg.event_id) {
+    logConv('conversão já conhecida — reaproveitando event_id', reg);
+    return reg;
+  }
+
+  reg = {
+    event_id:             novoEventId(),
+    criado_em:            new Date().toISOString(),
+    meta_lead_enviado:    false,
+    meta_lead_enviado_em: ''
+  };
+  gravarConversao(chave, reg);
+  logConv('event_id atribuído', reg.event_id);
+  return reg;
+}
+
+/* ─── ÚNICO PONTO DE DISPARO DO LEAD ────────────────────── */
+/* Nenhum outro lugar do projeto pode chamar fbq('track', 'Lead').
+   Só é invocada depois da confirmação do SprintHub. */
+function dispararLead(chave, reg) {
+  if (reg.meta_lead_enviado) {
+    logConv('Lead já enviado antes — nenhum evento novo', reg);
+    return;
+  }
+
+  if (typeof fbq !== 'function') {
+    logConv('pixel indisponível: Lead não enviado', reg.event_id);
+    return;
+  }
+
+  fbq('track', 'Lead', { content_name: 'Formulário ARI' }, { eventID: reg.event_id });
+
+  // fbq.callMethod só existe depois que o fbevents.js carrega de fato. Sem
+  // ele a chamada apenas entrou na fila do stub e provavelmente não sai —
+  // bloqueador de anúncios. O lead está no CRM mesmo assim: é a maior
+  // origem de divergência entre os relatórios, e precisa ficar visível.
+  var entregue = typeof fbq.callMethod === 'function';
+  if (!entregue) {
+    logConv('ATENÇÃO: Lead apenas enfileirado, fbevents.js não carregou', reg.event_id);
+  }
+
+  // Marcado como enviado mesmo quando só enfileirou: entre arriscar uma
+  // duplicação e arriscar uma perda, a regra do projeto é nunca duplicar.
+  reg.meta_lead_enviado    = true;
+  reg.meta_lead_enviado_em = new Date().toISOString();
+  gravarConversao(chave, reg);
+  logConv(entregue ? 'Lead enviado à Meta'
+                  : 'Lead contabilizado SEM confirmação de entrega à Meta', reg);
+}
 
 /* ─── SIMULADOR ─────────────────────────────────────────── */
 // ALTERADO: lógica de cálculo migrada do simulador oficial (arisimulador-main/script.js)
@@ -209,26 +367,106 @@ document.querySelectorAll('.faq-btn').forEach(function (btn) {
   });
 });
 
-/* ─── MÁSCARA WHATSAPP: (XX) XXXXX-XXXX, sem letras, sem espaços manuais ─ */
-/* ALTERADO: máscara agora inclui o hífen, batendo com o placeholder do campo. */
-document.getElementById('tel').addEventListener('input', function () {
-  // Extrai apenas dígitos e limita a 11 (2 DDD + 9 número)
-  var digits = this.value.replace(/\D/g, '').slice(0, 11);
+/* ─── WHATSAPP: máscara (XX) XXXXX-XXXX + validação dos 11 dígitos ── */
+/* ALTERADO: o campo agora aceita só celular com 11 dígitos (DDD + 9 dígitos).
+   O fixo de 10 dígitos saiu de propósito: o lead é contatado por WhatsApp e
+   o número é a chave de idempotência da conversão — número curto ou
+   incompleto virava lead impossível de atender. */
 
-  // Reconstrói com máscara: (XX) XXXXX-XXXX no celular, (XX) XXXX-XXXX no fixo
-  var masked = '';
-  if (digits.length > 0) {
-    masked = '(' + digits.slice(0, 2);
-    if (digits.length > 2) {
-      var corte = digits.length > 10 ? 5 : 4; // dígitos antes do hífen
-      masked += ') ' + digits.slice(2, 2 + corte);
-      if (digits.length > 2 + corte) {
-        masked += '-' + digits.slice(2 + corte);
-      }
+var telEl     = document.getElementById('tel');
+var telErroEl = document.getElementById('tel-erro');
+
+/* DDDs realmente em uso no Brasil (ANATEL). Fora dessa lista o número não
+   existe — erro de digitação ou campo preenchido no automatico. */
+var DDDS_VALIDOS = [
+  '11','12','13','14','15','16','17','18','19',
+  '21','22','24','27','28',
+  '31','32','33','34','35','37','38',
+  '41','42','43','44','45','46','47','48','49',
+  '51','53','54','55',
+  '61','62','63','64','65','66','67','68','69',
+  '71','73','74','75','77','79',
+  '81','82','83','84','85','86','87','88','89',
+  '91','92','93','94','95','96','97','98','99'
+];
+
+/* Formata os dígitos no padrão (XX) XXXXX-XXXX, parando onde o usuário parou */
+function mascararTel(digits) {
+  if (!digits) return '';
+  if (digits.length <= 2) return '(' + digits;
+  if (digits.length <= 7) return '(' + digits.slice(0, 2) + ') ' + digits.slice(2);
+  return '(' + digits.slice(0, 2) + ') ' + digits.slice(2, 7) + '-' + digits.slice(7);
+}
+
+/* Posição do cursor logo depois do n-ésimo dígito do texto mascarado —
+   sem isso o cursor pula para o fim a cada edição no meio do número. */
+function posAposDigito(masked, n) {
+  if (n <= 0) return 0;
+  var vistos = 0;
+  for (var i = 0; i < masked.length; i++) {
+    if (masked.charCodeAt(i) >= 48 && masked.charCodeAt(i) <= 57) {
+      vistos++;
+      if (vistos === n) return i + 1;
     }
   }
+  return masked.length;
+}
+
+/* Devolve o motivo da recusa, ou '' quando o número está válido */
+function erroTel(digits) {
+  if (!digits)                                    return 'Informe seu telefone/WhatsApp.';
+  if (digits.length !== 11)                       return 'O número precisa ter 11 dígitos: DDD + 9 dígitos. Ex.: (11) 99999-9999';
+  if (DDDS_VALIDOS.indexOf(digits.slice(0, 2)) === -1) return 'DDD inválido. Confira os dois primeiros dígitos.';
+  if (digits.charAt(2) !== '9')                   return 'Informe um celular com WhatsApp: após o DDD o número começa com 9.';
+  if (/^(\d)\1+$/.test(digits.slice(2)))          return 'Número inválido. Digite seu celular com WhatsApp.';
+  return '';
+}
+
+function mostrarErroTel(msg) {
+  telErroEl.textContent = msg;
+  telErroEl.hidden      = false;
+  telEl.classList.add('form-input--err');
+  telEl.setAttribute('aria-invalid', 'true');
+}
+
+function limparErroTel() {
+  telErroEl.textContent = '';
+  telErroEl.hidden      = true;
+  telEl.classList.remove('form-input--err');
+  telEl.removeAttribute('aria-invalid');
+}
+
+/* Valida e sincroniza com a validação nativa — assim o reportValidity() do
+   submit também barra o envio e leva o foco para este campo.
+   `mostrar` controla apenas se a mensagem aparece embaixo do campo. */
+function validarTel(mostrar) {
+  var erro = erroTel(telEl.value.replace(/\D/g, ''));
+  telEl.setCustomValidity(erro);
+  if (mostrar) {
+    if (erro) mostrarErroTel(erro);
+    else      limparErroTel();
+  }
+  return erro === '';
+}
+
+telEl.addEventListener('input', function () {
+  var digitosAntes = this.value.slice(0, this.selectionStart || 0).replace(/\D/g, '').length;
+  var masked = mascararTel(this.value.replace(/\D/g, '').slice(0, 11));
+
   this.value = masked;
+  try {
+    var pos = posAposDigito(masked, digitosAntes);
+    this.setSelectionRange(pos, pos);
+  } catch (e) { /* navegador sem suporte a seleção em input tel */ }
+
+  // Enquanto digita, o erro antigo sai de cena; a checagem volta no blur.
+  limparErroTel();
+  validarTel(false);
 });
+
+// Cola e autofill não disparam 'input' em todo navegador
+telEl.addEventListener('change', function () { validarTel(true); });
+telEl.addEventListener('blur',   function () { validarTel(true); });
 
 /* ─── FORMULÁRIO → SPRINTHUB WEBHOOK ────────────────────── */
 /* ALTERADO: destino migrado do webhook n8n para o hook do SprintHub.
@@ -271,11 +509,24 @@ async function confirmarEnvio(response) {
   return { ok: true, motivo: '' };
 }
 
+/* NOVO: ao limpar o formulário (sucesso do envio) o erro do telefone sai junto */
+document.getElementById('form-contato').addEventListener('reset', function () {
+  telEl.setCustomValidity('');
+  limparErroTel();
+});
+
 document.getElementById('form-contato').addEventListener('submit', async function (e) {
   e.preventDefault();
 
-  // Aciona a validação nativa (required, type, etc.) em todos os campos
+  // NOVO: portão do telefone. Marca a mensagem embaixo do campo e deixa o
+  // número inválido para a validação nativa — nada é enviado sem os
+  // 11 dígitos no formato (XX) XXXXX-XXXX.
+  var telOk = validarTel(true);
+
+  // Aciona a validação nativa (required, type, etc.) em todos os campos.
+  // Com o setCustomValidity acima, ela já reprova e foca o telefone também.
   if (!this.reportValidity()) return;
+  if (!telOk) { telEl.focus(); return; }
 
   var submitBtn = this.querySelector('[type="submit"]');
   var feedback  = document.getElementById('form-feedback');
@@ -290,7 +541,11 @@ document.getElementById('form-contato').addEventListener('submit', async functio
   // (confirmados pelo schema que a própria API devolve em caso de erro 400).
   // Não renomear sem conferir no CRM — nome errado = campo chega vazio.
   // "nome" e "whatsapp" são obrigatórios: a API responde 400 sem eles.
-  var utms = getUTMs();
+  // Chave da conversao: WhatsApp em digitos. E por ela que o registro de
+  // idempotencia reconhece um envio repetido do MESMO lead.
+  var whatsapp  = document.getElementById('tel').value.replace(/\D/g, '');
+  var conversao = obterConversao(whatsapp);
+  logConv('formulario recebido', { chave: whatsapp, event_id: conversao.event_id });
 
   var params = {
     // ALTERADO: era "firstname", que a API rejeita com
@@ -298,20 +553,37 @@ document.getElementById('form-contato').addEventListener('submit', async functio
     nome:                       document.getElementById('nome').value.trim(),
     email:                      document.getElementById('email').value.trim(),
     // ALTERADO: envia só os dígitos (11999999999); a máscara é só visual
-    whatsapp:                   document.getElementById('tel').value.replace(/\D/g, ''),
+    whatsapp:                   whatsapp,
     profissao:                  document.getElementById('profissao').value.trim(),
     qual_o_valor_inicial_do_s:  document.getElementById('capital-form').value,
     voce_ja_investe_em_alguma:  document.getElementById('modalidade').value,
     voce_esta_pronto_para_inv:  document.getElementById('prazo-decisao').value,
 
-    // Atribuição
+    // Atribuicao preservada desde a ENTRADA na landing page. Nao e relida da
+    // URL no envio: quem recarrega sem os parametros nao perde a origem.
     site_de_origem:  window.location.href,
-    utm_source:      utms.utm_source,
-    utm_medium:      utms.utm_medium,
-    utm_term:        utms.utm_term,
-    utm_content:     utms.utm_content,
-    utm_campaing:    utms.utm_campaign, // (sic) o campo no SprintHub está grafado "campaing"
-    cta_origem:      ctaOrigem || 'direto', // ainda sem campo correspondente no CRM
+    landing_page:    atribuicao.landing_page || '',
+    utm_source:      atribuicao.utm_source   || '',
+    utm_medium:      atribuicao.utm_medium   || '',
+    utm_term:        atribuicao.utm_term     || '',
+    utm_content:     atribuicao.utm_content  || '',
+    utm_campaing:    atribuicao.utm_campaign || '', // (sic) o campo no SprintHub esta grafado "campaing"
+    utm_id:          atribuicao.utm_id       || '',
+    cta_origem:      ctaOrigem || 'direto',
+
+    // Sinais de clique da Meta, para a Conversions API casar a conversao com
+    // o anuncio quando for ligada. _fbc so existe se o pixel tiver carregado,
+    // por isso o fbclid cru vai junto como plano B.
+    fbclid:          atribuicao.fbclid || '',
+    fbc:             lerCookie('_fbc'),
+    fbp:             lerCookie('_fbp'),
+
+    // Auditoria: e o que permite cruzar lead no CRM x evento na Meta.
+    // Campos ainda sem slug correspondente no SprintHub somem em silencio
+    // ate serem criados la.
+    event_id:        conversao.event_id,
+    primeira_visita: atribuicao.primeira_visita || '',
+    convertido_em:   new Date().toISOString(),
   };
 
   // ALTERADO: o hook do SprintHub lê os dados da QUERY STRING e ignora o corpo
@@ -335,16 +607,10 @@ document.getElementById('form-contato').addEventListener('submit', async functio
     const envio = await confirmarEnvio(response);
     if (!envio.ok) throw new Error(envio.motivo);
 
-    // Evento Lead do Pixel da Meta (id 2102101857297540) — o único que o site
-    // envia ao pixel. Só chega aqui com o envio confirmado pelo SprintHub, e a
-    // trava garante um disparo por visita.
-    if (typeof fbq === 'function' && !leadEnviado) {
-      fbq('track', 'Lead', { content_name: 'Formulário ARI' }, { eventID: novoEventId() });
-      leadEnviado = true;
-    } else if (typeof fbq !== 'function') {
-      // Bloqueador de anúncios ou pixel não carregado — não impede o redirect
-      console.warn('[ARI] fbq indisponível: evento Lead não foi enviado.');
-    }
+    // Confirmado pelo CRM: unico ponto do projeto autorizado a contabilizar a
+    // conversao. Toda a decisao de disparar ou nao esta em dispararLead().
+    logConv('SprintHub confirmou a criacao do lead', conversao.event_id);
+    dispararLead(whatsapp, conversao);
 
     feedback.textContent = 'Recebemos seu contato! Redirecionando…';
     feedback.classList.add('form-feedback--ok');
@@ -362,14 +628,16 @@ document.getElementById('form-contato').addEventListener('submit', async functio
     }, 600);
 
   } catch (err) {
-    console.error('[ARI] Erro ao enviar formulário:', err);
+    // O event_id fica gravado e sem marca de envio: a proxima tentativa
+    // reaproveita o mesmo id em vez de criar uma segunda conversao.
+    logConv('envio recusado, event_id preservado para retry', conversao.event_id);
+    console.error('[ARI] Erro ao enviar formulario:', err);
     feedback.textContent = 'Ocorreu um erro ao enviar. Por favor, tente novamente.';
     feedback.classList.add('form-feedback--err');
     feedback.hidden = false;
 
-    // ALTERADO: o botão só é reabilitado quando o envio falha. No sucesso ele
-    // fica travado até o redirect — antes, o `finally` o liberava e abria uma
-    // janela de 600 ms em que um segundo clique disparava outro Lead.
+    // O botão só volta no erro. No sucesso fica travado até o redirect — o
+    // `finally` anterior o liberava e abria 600 ms para um segundo clique.
     submitBtn.disabled    = false;
     submitBtn.textContent = 'Quero investir no ARI';
   }
